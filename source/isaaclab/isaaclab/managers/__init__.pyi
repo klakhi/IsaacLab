@@ -28,8 +28,10 @@ __all__ = [
     "RecorderManagerBaseCfg",
     "RecorderTerm",
     "RewardManager",
+    "RewardTermStatistics",
     "SceneEntityCfg",
     "TerminationManager",
+    "TerminationTermStatistics",
 ]
 
 from .action_manager import ActionManager, ActionTerm
@@ -56,6 +58,6 @@ from .recorder_manager import (
     RecorderManagerBaseCfg,
     RecorderTerm,
 )
-from .reward_manager import RewardManager
+from .reward_manager import RewardManager, RewardTermStatistics
 from .scene_entity_cfg import SceneEntityCfg
-from .termination_manager import TerminationManager
+from .termination_manager import TerminationManager, TerminationTermStatistics

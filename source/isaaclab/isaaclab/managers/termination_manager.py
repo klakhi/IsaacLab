@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -18,6 +19,14 @@ from .manager_term_cfg import TerminationTermCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+@dataclass
+class TerminationTermStatistics:
+    """Cross-environment statistics for a single termination term."""
+
+    activation_rate: float
+    """Fraction of the selected environments whose most recent episode ended because of this term."""
 
 
 class TerminationManager(ManagerBase):
@@ -151,6 +160,29 @@ class TerminationManager(ManagerBase):
             term_cfg.func.reset(env_ids=env_ids)
         # return logged information
         return extras
+
+    def get_term_statistics(self, env_ids: Sequence[int] | None = None) -> dict[str, TerminationTermStatistics]:
+        """Computes, for each termination term, the fraction of environments it ended.
+
+        Uses the same per-environment, per-term data already retained in :attr:`_last_episode_dones`
+        (the term(s) that ended the most recent episode of each environment) instead of the
+        cross-environment mean that :meth:`reset` logs. This makes it possible to see whether a
+        termination condition (e.g. an instability check) has ever actually fired. Call this once
+        per evaluation episode and aggregate externally to detect a condition that never occurs over
+        many episodes; this method itself only reports the latest recorded episode per environment.
+
+        Args:
+            env_ids: The environment ids to compute statistics over. Defaults to all environments.
+
+        Returns:
+            Dictionary mapping each termination term name to its :class:`TerminationTermStatistics`.
+        """
+        if env_ids is None:
+            env_ids = slice(None)
+        rates = self._last_episode_dones[env_ids].float().mean(dim=0).cpu()
+        return {
+            name: TerminationTermStatistics(activation_rate=rates[i].item()) for i, name in enumerate(self._term_names)
+        }
 
     def compute(self) -> torch.Tensor:
         """Computes the termination signal as union of individual terms.

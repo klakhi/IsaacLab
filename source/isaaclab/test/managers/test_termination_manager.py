@@ -140,3 +140,37 @@ def test_time_out_vs_terminated_split(env):
     out = tm.compute()
     assert torch.all(out)
     assert torch.all(tm.terminated) and torch.all(tm.time_outs)
+
+
+def test_get_term_statistics(env):
+    """Test that per-term statistics surface a term that fires and a term that never fires."""
+    cfg = {
+        "term_3": TerminationTermCfg(func=fail_every_3_steps, time_out=False),
+        "term_10": TerminationTermCfg(func=fail_every_10_steps, time_out=False),
+    }
+    tm = TerminationManager(cfg, env)
+
+    # only term_3 ever fires
+    env.counter = 3
+    tm.compute()
+
+    stats = tm.get_term_statistics()
+    assert stats["term_3"].activation_rate == pytest.approx(1.0)
+    assert stats["term_10"].activation_rate == pytest.approx(0.0)
+
+
+def test_get_term_statistics_env_ids(env):
+    """Test that statistics can be restricted to a subset of environments."""
+    cfg = {"term_3": TerminationTermCfg(func=fail_every_3_steps, time_out=False)}
+    tm = TerminationManager(cfg, env)
+
+    env.counter = 3
+    tm.compute()
+    # manually clear the fired flag for half the environments to create a mixed activation rate
+    tm._last_episode_dones[: env.num_envs // 2, 0] = False
+
+    stats = tm.get_term_statistics(env_ids=list(range(env.num_envs // 2)))
+    assert stats["term_3"].activation_rate == pytest.approx(0.0)
+
+    stats = tm.get_term_statistics(env_ids=list(range(env.num_envs // 2, env.num_envs)))
+    assert stats["term_3"].activation_rate == pytest.approx(1.0)

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -18,6 +19,24 @@ from .manager_term_cfg import RewardTermCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+@dataclass
+class RewardTermStatistics:
+    """Cross-environment statistics for a single reward term's episodic contribution."""
+
+    mean: float
+    """Mean episodic contribution across the selected environments."""
+    std: float
+    """Standard deviation of the episodic contribution across the selected environments."""
+    min: float
+    """Minimum episodic contribution across the selected environments."""
+    max: float
+    """Maximum episodic contribution across the selected environments."""
+    top_k_mean: float
+    """Mean of the top ~5% of environments by \\|contribution\\|, at least one environment."""
+    share_of_total: float
+    """\\|mean\\| of this term divided by the sum of \\|mean\\| across all terms; 0 if that sum is 0."""
 
 
 class RewardManager(ManagerBase):
@@ -125,6 +144,43 @@ class RewardManager(ManagerBase):
             term_cfg.func.reset(env_ids=env_ids)
         # return logged information
         return extras
+
+    def get_term_statistics(self, env_ids: Sequence[int] | None = None) -> dict[str, RewardTermStatistics]:
+        """Computes cross-environment statistics for each reward term's current episodic contribution.
+
+        Unlike :meth:`reset`, which collapses each term's per-environment episodic sum to a single
+        mean for logging, this method retains the distribution across environments so that reward
+        issues such as a term that pays nothing, or a term that dominates the total or is earned
+        disproportionately by a few environments, can be detected. Call this before :meth:`reset`
+        for the same ``env_ids``, since :meth:`reset` zeroes the underlying episodic sums.
+
+        Args:
+            env_ids: The environment ids to compute statistics over. Defaults to all environments.
+
+        Returns:
+            Dictionary mapping each reward term name to its :class:`RewardTermStatistics`.
+        """
+        if env_ids is None:
+            env_ids = slice(None)
+        # gather each term's raw per-env episodic sum first, so share_of_total can be normalized
+        per_term_values = {name: self._episode_sums[name][env_ids] for name in self._term_names}
+        total_abs_mean = sum(values.mean().abs().item() for values in per_term_values.values())
+
+        stats: dict[str, RewardTermStatistics] = {}
+        for name, values in per_term_values.items():
+            num_envs = values.numel()
+            k = max(1, round(num_envs * 0.05))
+            top_k_mean = values.abs().topk(k).values.mean().item()
+            mean = values.mean().item()
+            stats[name] = RewardTermStatistics(
+                mean=mean,
+                std=values.std(correction=0).item() if num_envs > 0 else 0.0,
+                min=values.min().item(),
+                max=values.max().item(),
+                top_k_mean=top_k_mean,
+                share_of_total=(abs(mean) / total_abs_mean) if total_abs_mean > 0 else 0.0,
+            )
+        return stats
 
     def compute(self, dt: float) -> torch.Tensor:
         """Computes the reward signal as a weighted sum of individual terms.

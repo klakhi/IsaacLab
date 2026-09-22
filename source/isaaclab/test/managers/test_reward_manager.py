@@ -40,6 +40,11 @@ def grilled_chicken_with_yoghurt(env, hot: bool, bland: float):
     return 0
 
 
+def grilled_chicken_varying(env):
+    """Returns a value that differs per environment, to exercise cross-environment spread."""
+    return torch.arange(env.num_envs, dtype=torch.float)
+
+
 @pytest.fixture
 def env():
     sim = SimulationContext()
@@ -190,3 +195,49 @@ def test_invalid_reward_config(env):
     }
     with pytest.raises(ValueError):
         RewardManager(cfg, env)
+
+
+def test_get_term_statistics(env):
+    """Test that per-term statistics surface a dead term and a dominant, varying term."""
+    cfg = {
+        "dead_term": RewardTermCfg(func=grilled_chicken_with_curry, weight=0.0, params={"hot": False}),
+        "dominant_term": RewardTermCfg(func=grilled_chicken_varying, weight=1.0),
+    }
+    rew_man = RewardManager(cfg, env)
+    rew_man.compute(dt=env.dt)
+
+    stats = rew_man.get_term_statistics()
+    assert set(stats.keys()) == {"dead_term", "dominant_term"}
+
+    # the dead term never pays anything, so it should not claim any share of the total
+    assert stats["dead_term"].mean == pytest.approx(0.0)
+    assert stats["dead_term"].share_of_total == pytest.approx(0.0)
+
+    # the varying term pays every environment differently and claims the entire share
+    assert stats["dominant_term"].share_of_total == pytest.approx(1.0)
+    assert stats["dominant_term"].std > 0.0
+    assert stats["dominant_term"].min == pytest.approx(0.0)
+    assert stats["dominant_term"].max == pytest.approx((env.num_envs - 1) * env.dt)
+    # top-5% of 20 envs is 1 env: the single highest-magnitude contributor
+    assert stats["dominant_term"].top_k_mean == pytest.approx(stats["dominant_term"].max)
+
+
+def test_get_term_statistics_single_env(env):
+    """Test that a single-environment selection reports std as 0.0 rather than nan."""
+    cfg = {"term_1": RewardTermCfg(func=grilled_chicken, weight=10)}
+    rew_man = RewardManager(cfg, env)
+    rew_man.compute(dt=env.dt)
+
+    stats = rew_man.get_term_statistics(env_ids=[0])
+    assert stats["term_1"].std == pytest.approx(0.0)
+    assert stats["term_1"].share_of_total == pytest.approx(1.0)
+
+
+def test_get_term_statistics_all_zero(env):
+    """Test that an all-zero-contribution config does not divide by zero."""
+    cfg = {"term_1": RewardTermCfg(func=grilled_chicken_with_curry, weight=0.0, params={"hot": False})}
+    rew_man = RewardManager(cfg, env)
+    rew_man.compute(dt=env.dt)
+
+    stats = rew_man.get_term_statistics()
+    assert stats["term_1"].share_of_total == pytest.approx(0.0)
